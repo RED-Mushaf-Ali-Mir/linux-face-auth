@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+data/*
+!data/.gitkeep
+*.npy
+*.log
+models/*.onnx
+*.so
+*.o
+fork_demo
+helper_test
