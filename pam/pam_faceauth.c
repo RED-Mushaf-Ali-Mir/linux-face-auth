@@ -156,10 +156,20 @@ static int run_helper(const char *path, int *exit_code)
     return -1;
 }
 
+/* Default deny: only one case means "authenticated". */
+static int map_result(int rc, int code)
+{
+    if (rc == 0 && code == 0)
+        return PAM_SUCCESS;          /* helper ran and said: face matched */
+    if (rc == 0 && code == 1)
+        return PAM_AUTH_ERR;         /* face seen, but not this user */
+    return PAM_AUTHINFO_UNAVAIL;     /* no face, missing helper, timeout, crash, error */
+}
+
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
                                    int argc, const char **argv)
 {
-    (void)flags;
+
     struct config cfg;
 
     if (parse_args(pamh, argc, argv, &cfg) != 0) {
@@ -187,16 +197,26 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
         return PAM_IGNORE;
     }
 
-    pam_syslog(pamh, LOG_INFO, "guard passed: user=%s service=%s argc=%d",
-               user, service, argc);
+    pam_syslog(pamh, LOG_INFO, "guard passed: user=%s service=%s argc=%d flags=%#x",
+               user, service, argc, (unsigned)flags);
+
+        if (!(flags & PAM_SILENT))
+        pam_info(pamh, "Face check: look at the camera...");
 
     int code = -999;
     int rc = run_helper(cfg.helper, &code);
     int saved_errno = errno;                    /* copy before anything else runs */
-    pam_syslog(pamh, LOG_INFO, "helper=%s rc=%d code=%d errno=%d",
-               cfg.helper, rc, code, saved_errno);
+    int result = map_result(rc, code);
 
-    return PAM_IGNORE;                          /* stage 5 maps rc/code to PAM codes */
+    pam_syslog(pamh, LOG_INFO, "helper=%s rc=%d code=%d errno=%d result=%s",
+               cfg.helper, rc, code, saved_errno, pam_strerror(pamh, result));
+
+        if (!(flags & PAM_SILENT)) {
+            int ir = pam_info(pamh, "Face check: look at the camera...");
+            if (ir != PAM_SUCCESS)
+                pam_syslog(pamh, LOG_INFO, "pam_info failed: %s", pam_strerror(pamh, ir));
+    }
+    return result;
 }
 
 PAM_EXTERN int pam_sm_setcred(pam_handle_t *pamh, int flags,
