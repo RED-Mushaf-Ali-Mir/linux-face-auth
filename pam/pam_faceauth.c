@@ -11,6 +11,8 @@
 #include <errno.h>
 #include <stdlib.h>
 
+static int run_helper(const char *path , int* exit_code);
+
 struct config {const char *user;  const char* service; const char* helper;};
 
 static const char* arg_value(const char* arg , const char* key){
@@ -63,7 +65,7 @@ static int parse_args (pam_handle_t* pamh , int argc , const char **argv , struc
 	}
 	
 	if (cfg -> helper[0] != '/'){
-	    pam_syslog(pamh , LOG_ERR , "Helper must be absolute path");
+	    pam_syslog(pamh , LOG_ERR , "Helper must be absolute path %s" , cfg-> helper);
 	        return -1;
 	}
 	return 0;
@@ -103,9 +105,58 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh , int flags , int argc , c
 	
 	pam_syslog(pamh , LOG_INFO , "Gaurd Passed");
 	
+	int code = -999;
+	int rc = run_helper(cfg.helper , &code);
+	int saved_errno = errno;
+	pam_syslog(pamh , LOG_INFO , "helper=%s rc=%d code=%d errno=%d" , cfg.helper , rc , code ,saved_errno);
+	
 	return PAM_IGNORE;
 			
 }
+
+static int run_helper (const char* path , int *exit_code) {
+
+    pid_t pid = fork();
+    if (pid < 0)
+        return -1;
+        
+    if (pid == 0){
+        int fd = open("/dev/null" , O_RDWR);
+        
+        if (fd < 0)
+            _exit(127);
+        if (dup2(fd , 0) < 0 || dup2(fd , 1 ) < 0 || dup2 (fd , 2) < 0)
+            _exit(127);
+        if (fd > 2){
+            close(fd);
+        }
+        
+        char *const argv[] = { (char *)path, NULL };
+        char *const envp[] = { "PATH=/usr/bin:/bin", NULL };
+        execve(path, argv, envp);
+        
+        _exit(127); // // only reached if execve failed
+    }
+    
+    int status;pid_t w;
+    
+    do{
+    w = waitpid (pid , &status , 0);
+    }while(w == -1 && errno == EINTR);
+        
+    if (w == -1)
+        return -1;
+    
+    if  (WIFEXITED(status)){
+        *exit_code = WEXITSTATUS(status);
+        return 0;
+    }    
+    if (WIFSIGNALED(status))
+        return -2;
+        
+    return -1;
+}
+
 
 PAM_EXTERN int pam_sm_setcred (pam_handle_t *pamh , int flags , int argc , const char **argv)
 {
