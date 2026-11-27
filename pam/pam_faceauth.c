@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define PAM_SM_AUTH
 #include <security/pam_modules.h>
 #include <security/pam_ext.h>
@@ -12,6 +13,7 @@
 #include <sys/pidfd.h>   /* pidfd_open (glibc 2.36+) */
 #include <poll.h>        /* poll, struct pollfd */
 #include <signal.h>      /* kill, SIGKILL */
+#include <grp.h> 
 
 #define DEFAULT_HELPER    "/opt/face-auth/face_auth"
 #define HELPER_TIMEOUT_MS 8000
@@ -110,7 +112,18 @@ static int run_helper(const char *path, int *exit_code)
         return -1;
 
     if (pid == 0) {
-        /* Part 2: child disconnects itself. Never return from here. */
+        /* Part 2a (NEW): become fully root, not "half root".
+         * sudo gave us real=mushaf, effective=root. Shells and some libraries
+         * drop privileges when they see that mix (dash did, so we got exit 3).
+         * Make all IDs root so every program after exec sees one clear identity. */
+        if (setgroups(0, NULL) < 0)     /* drop mushaf's extra groups: sudo, video, ... */
+            _exit(127);
+        if (setresgid(0, 0, 0) < 0)     /* real, effective, saved GID = 0 (root)       */
+            _exit(127);
+        if (setresuid(0, 0, 0) < 0)     /* real, effective, saved UID = 0, done LAST    */
+            _exit(127);
+
+        /* Part 2b: own process group (unchanged) */
         if (setpgid(0, 0) < 0)
             _exit(127);
 
