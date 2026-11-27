@@ -20,6 +20,7 @@ struct config {
     const char *user;
     const char *service;
     const char *helper;
+    int verbose;
 };
 
 /* If arg is exactly "key=value", return a pointer to value, else NULL. */
@@ -39,6 +40,7 @@ static int parse_args(pam_handle_t *pamh, int argc, const char **argv,
     cfg->user = NULL;
     cfg->service = NULL;
     cfg->helper = NULL;
+    cfg->verbose = 0;
 
     for (int i = 0; i < argc; i++) {
         const char *v;
@@ -56,6 +58,18 @@ static int parse_args(pam_handle_t *pamh, int argc, const char **argv,
         v = arg_value(argv[i], "helper");
         if (v != NULL) {
             cfg->helper = v;
+            continue;
+        }
+        v = arg_value(argv[i], "verbose");
+        if (v != NULL) {
+            if (strcmp(v, "1") == 0)
+                cfg->verbose = 1;
+            else if (strcmp(v, "0") == 0)
+                cfg->verbose = 0;
+            else {
+                pam_syslog(pamh, LOG_ERR, "verbose must be 0 or 1: '%s'", v);
+                return -1;
+            }
             continue;
         }
         pam_syslog(pamh, LOG_ERR, "unknown option: '%s'", argv[i]);
@@ -200,22 +214,27 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     pam_syslog(pamh, LOG_INFO, "guard passed: user=%s service=%s argc=%d flags=%#x",
                user, service, argc, (unsigned)flags);
 
-        if (!(flags & PAM_SILENT))
+    int talk = cfg.verbose || !(flags & PAM_SILENT);
+    if (talk)
         pam_info(pamh, "Face check: look at the camera...");
 
     int code = -999;
     int rc = run_helper(cfg.helper, &code);
-    int saved_errno = errno;                    /* copy before anything else runs */
+    int saved_errno = (rc == -1) ? errno : 0;                    /* copy before anything else runs */
     int result = map_result(rc, code);
 
     pam_syslog(pamh, LOG_INFO, "helper=%s rc=%d code=%d errno=%d result=%s",
                cfg.helper, rc, code, saved_errno, pam_strerror(pamh, result));
-
-        if (!(flags & PAM_SILENT)) {
-            int ir = pam_info(pamh, "Face check: look at the camera...");
+        
+        if (talk ) {
+            const char *msg = (result == PAM_SUCCESS)
+                          ? "Face recognized."
+                          : "Face not recognized, use your password.";
+            int ir = pam_info(pamh, "%s", msg);
             if (ir != PAM_SUCCESS)
                 pam_syslog(pamh, LOG_INFO, "pam_info failed: %s", pam_strerror(pamh, ir));
-    }
+                
+        }
     return result;
 }
 
